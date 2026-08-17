@@ -1,0 +1,2112 @@
+INFORME INTEGRAL DE RECONSTRUCCIÓN — InjectedMouse.dll
+Fecha del informe: 17/08/2026
+Archivo analizado: InjectedMouse.dll
+Objetivo: conservar en texto plano toda la información obtenida durante el análisis para poder reutilizarla como especificación de referencia al reproducir la aplicación o estudiar el uso del DLL.
+
+======================================================================
+1. IDENTIDAD DEL ARCHIVO
+======================================================================
+
+Nombre recibido:
+InjectedMouse.dll
+
+Tipo:
+PE32+ / DLL / x64
+
+Tamaño aproximado:
+24,1 MB
+
+SHA-256:
+40dafa2f3e4c162cbd8bf43228a6c68714f34b37e4c3c5cad9f763617e520eab
+
+MD5:
+8265acb5560d3ecfcfaacd061d95d404
+
+SHA-1:
+5cca97b16a1d1d9e8aa102de41866e505d4dae1e
+
+Fecha PE:
+19 de febrero de 2025
+
+Versión declarada:
+1.0.0.0
+
+Producto:
+InjectedMouse
+
+Nombre interno/original observado:
+InjectedMouse.exe
+
+Compañía:
+El campo correspondiente no contiene un nombre útil.
+
+Firma digital:
+No hay Authenticode. El directorio de seguridad PE está a cero.
+
+Conclusión de identidad:
+El archivo es un binario nativo x64 de Windows. Aunque el archivo entregado se llama .dll, los metadatos/nombres internos y las exportaciones indican una aplicación nativa/WinRT empaquetada más que una DLL SDK convencional.
+
+======================================================================
+2. TECNOLOGÍA DE COMPILACIÓN Y RUNTIME
+======================================================================
+
+El binario presenta indicios muy fuertes de .NET Native / Native AOT / ILC.
+
+Elementos observados:
+
+mrt100_app.dll
+SharedLibrary.dll
+System.*
+Microsoft.UI.Xaml
+Microsoft.Web.WebView2.Core
+Windows.UI.Xaml
+Windows.Gaming.Input
+Newtonsoft.Json
+HtmlAgilityPack
+
+Ruta de símbolos incrustada:
+
+C:\Users\owner\Desktop\InjectedMouseGamepass\bin\x64\Release\ilc\InjectedMouse.pdb
+
+La presencia de "ilc" apunta a IL Compiler / compilación nativa.
+
+Arquitectura conceptual:
+
+C#/.NET
+    ->
+IL Compiler / Native AOT
+    ->
+código máquina x64
+
+Por este motivo no debe esperarse un CLR metadata stream normal ni una recuperación directa de todo el C# mediante dnSpy. El binario contiene código nativo generado a partir del proyecto.
+
+También aparecen nombres asociados a generación/interoperabilidad:
+
+InjectedMouse.McgInterop
+InjectedMouse.McgInterop.dll
+System.Private.InjectedMouse.Generated
+InjectedMouse.McgInterop.dll
+
+======================================================================
+3. NOMBRE Y PROPÓSITO GENERAL RECONSTRUIDOS
+======================================================================
+
+El nombre del proyecto observado es:
+
+InjectedMouseGamepass
+
+El nombre de la clase funcional principal observado es:
+
+InputInjectionRemapper
+
+Clases propias relevantes:
+
+InputInjectionRemapper.MainPage
+InputInjectionRemapper.OptionsDialog
+InputInjectionRemapper.OptionsDialog.FavoriteItem
+
+Interpretación funcional:
+
+La aplicación parece ser una interfaz nativa WinUI/XAML que envuelve Xbox Cloud Gaming/Game Pass en WebView2 y añade un sistema de remapeo/inyección de entrada.
+
+Descripción funcional más fiel:
+
+"Remapeador/controlador de entrada para Xbox Cloud Gaming basado en WebView2, con interfaz WinUI, favoritos/historial, segundo WebView PiP, control de audio y una capa de simulación de eventos de ratón/teclado/gamepad."
+
+IMPORTANTE:
+"Input Injection" aquí no debe interpretarse automáticamente como DLL injection dentro de otro proceso. La evidencia apunta a generación programática de entrada y eventos dentro de Windows/WebView/DOM.
+
+======================================================================
+4. ARQUITECTURA GENERAL RECONSTRUIDA
+======================================================================
+
+Arquitectura conceptual:
+
+                    +-------------------------+
+                    |     InjectedMouse       |
+                    |       WinUI / XAML      |
+                    +------------+------------+
+                                 |
+                +----------------+----------------+
+                |                                 |
+                v                                 v
+        Main WebView2                       PiP WebView2
+                |                                 |
+                v                                 v
+         xbox.com/play                     xbox.com/play
+                |                                 |
+                +----------------+----------------+
+                                 |
+                                 v
+                         Input Controller
+                                 |
+                +----------------+----------------+
+                |                |                |
+                v                v                v
+             DOM mouse       DOM keyboard     Windows input
+                |                |                |
+                +----------------+----------------+
+                                 |
+                                 v
+                           Game / WebView
+
+Arquitectura funcional alternativa:
+
+Gamepad / Mouse / Keyboard
+        ->
+Input capture/remapping
+        ->
+Mapping
+        ->
+Action
+        ->
+(1) Windows input
+(2) WebView2 input
+(3) JavaScript DOM event
+
+======================================================================
+5. WEBVIEW2
+======================================================================
+
+Se identifican dos superficies WebView:
+
+MainWebView
+PipWebView
+
+La aplicación carga:
+
+https://www.xbox.com/play/
+https://www.xbox.com/play
+https://www.xbox.com/play/search
+
+También aparecen referencias a:
+
+gamepass.com
+xbox.com
+
+El uso de WebView2 encaja con el mecanismo documentado por Microsoft:
+
+window.chrome.webview.postMessage(...)
+        ->
+CoreWebView2.WebMessageReceived
+
+Microsoft documenta que WebMessageReceived se dispara cuando el documento de nivel superior ejecuta window.chrome.webview.postMessage y la mensajería está habilitada. La página puede enviar objetos JSON al host y el host puede recibirlos como JSON/string. Fuente:
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2
+
+La documentación actual de Microsoft también describe ExecuteScriptAsync, NavigationStarting, NavigationCompleted, WebMessageReceived y PostWebMessageAsJson/PostWebMessageAsString para este patrón de integración. Fuente:
+https://learn.microsoft.com/es-es/windows/apps/develop/ui/controls/webview2
+
+La documentación indica además que WebMessageReceived recibe los mensajes del documento y que los mensajes de un mismo frame mantienen su orden relativo, aunque no hay garantía de orden entre frames o frente a determinadas APIs DOM. Fuente:
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2
+
+======================================================================
+6. CANAL JAVASCRIPT <-> APLICACIÓN
+======================================================================
+
+JavaScript observado:
+
+window.chrome.webview.postMessage(...)
+
+Mensajes/nombres funcionales observados:
+
+game-selected
+focusOnInput
+blurOnInput
+
+Flujo:
+
+Página Xbox
+    ->
+JavaScript inyectado
+    ->
+window.chrome.webview.postMessage(...)
+    ->
+WebMessageReceived
+    ->
+MainPage / lógica de aplicación
+    ->
+acción local
+
+El binario contiene lógica que parece recibir datos como:
+
+type
+url
+title
+
+Ejemplo conceptual reconstruido:
+
+{
+    "type": "game-selected",
+    "url": "...",
+    "title": "..."
+}
+
+NOTA:
+El JSON anterior es una reconstrucción conceptual basada en las cadenas observadas; no debe considerarse el formato completo y exacto sin extraer el script original de forma literal.
+
+======================================================================
+7. DETECCIÓN Y SELECCIÓN DE JUEGOS
+======================================================================
+
+Se observa JavaScript relacionado con:
+
+.game-item
+
+El flujo reconstruido es:
+
+click
+    ->
+event.target
+    ->
+subir por parentElement
+    ->
+buscar .game-item
+    ->
+obtener href / URL actual
+    ->
+obtener innerText / document.title
+    ->
+sendGameSelection(...)
+    ->
+window.chrome.webview.postMessage(...)
+    ->
+host nativo
+
+También existe observación de cambios dinámicos del DOM mediante MutationObserver.
+
+La lógica observa cambios de:
+
+location.href
+
+Cuando detecta cambio de URL puede volver a emitir información de juego.
+
+Esto es importante porque Xbox Cloud Gaming es una aplicación web dinámica y puede cambiar contenido/URL sin una navegación completa tradicional.
+
+======================================================================
+8. NAVEGACIÓN
+======================================================================
+
+Métodos/símbolos observados:
+
+HomeButton_Click
+SearchButton_Click
+SetInitialFocus
+CanGoBack
+CanGoForward
+
+Interpretación:
+
+La aplicación proporciona navegación propia alrededor del WebView.
+
+También existen mecanismos para conocer/cambiar la URL y normalizarla.
+
+======================================================================
+9. FAVORITOS
+======================================================================
+
+Archivos locales observados:
+
+favorites.json
+pipFavorites.json
+
+Métodos observados:
+
+LoadFavorites
+SaveFavorites
+
+LoadPipFavorites
+SavePipFavorites
+
+AddToFavorites
+AddFavoriteButton_Click
+AddPipFavoriteButton_Click
+
+DeleteFavoriteAsync
+RenameFavoriteAsync
+
+PopulateMyFavoritesAsync
+PopulatePipFavoritesAsync
+
+Elementos/UI:
+
+PlayerFavorites
+PlayerPipFavorites
+PipFavoritesPanel
+CurrentSelectedFavorite
+
+Clase:
+
+InputInjectionRemapper.OptionsDialog.FavoriteItem
+
+Propiedades observadas:
+
+Title
+Url
+FavoriteName
+ActualUrl
+FaviconPath
+
+Flujo conceptual:
+
+URL
+  ->
+NormalizeUrl
+  ->
+obtener título
+  ->
+obtener/cachear favicon
+  ->
+crear FavoriteItem
+  ->
+guardar en favorites.json o pipFavorites.json
+  ->
+mostrar en UI
+
+======================================================================
+10. NORMALIZACIÓN DE URL Y FAVICON
+======================================================================
+
+Métodos observados:
+
+GetGameTitleFromUrl
+FetchAndCacheFavicon
+NormalizeUrl
+FindFavoriteButtonByUrl
+
+Cadenas de favicon observadas:
+
+/favicon.ico
+/favicon-16x16.png
+/favicon-32x32.png
+/favicon-48x48.png
+/favicon-96x96.png
+/favicon-192x192.png
+/favicon-512x512.png
+/favicon.svg
+/favicon.webp
+
+Interpretación:
+
+El programa intenta obtener un icono del sitio/juego y cachearlo localmente.
+
+También parece normalizar URL para poder comparar correctamente favoritos y localizar el favorito correspondiente a una URL.
+
+======================================================================
+11. HISTORIAL
+======================================================================
+
+Archivo observado:
+
+history.json
+
+Símbolos:
+
+processedUrlsHistory
+AddToHistory
+PopulateHistoryAsync
+
+Conclusión:
+
+La aplicación mantiene un historial local de URLs procesadas/visitadas.
+
+Flujo conceptual:
+
+navegación
+    ->
+normalización
+    ->
+processedUrlsHistory
+    ->
+history.json
+    ->
+UI/historial
+
+======================================================================
+12. INPUT: CONCEPTO CENTRAL
+======================================================================
+
+El sistema parece tener tres capas:
+
+CAPA 1:
+Captura de entrada:
+- mouse
+- teclado
+- gamepad
+
+CAPA 2:
+Remapeo:
+input
+    ->
+binding/action
+
+CAPA 3:
+Ejecución:
+- Windows input injection
+- WebView2 input
+- JavaScript DOM events
+
+Esto permite convertir, por ejemplo:
+
+Gamepad A
+    ->
+MouseLeft
+    ->
+mousedown
+    ->
+mouseup
+    ->
+click
+
+O:
+
+D-Pad Right
+    ->
+ArrowRight
+    ->
+KeyboardEvent keydown
+    ->
+KeyboardEvent keyup
+
+O:
+
+Stick
+    ->
+X,Y
+    ->
+elementFromPoint(x,y)
+    ->
+mousemove
+
+Los ejemplos anteriores son modelos funcionales reconstruidos; no constituyen un listado confirmado de todos los bindings internos.
+
+======================================================================
+13. EVENTOS DE RATÓN EN DOM
+======================================================================
+
+El binario contiene JavaScript para generar artificialmente:
+
+mouseover
+mouseenter
+mousemove
+mouseout
+mouseleave
+mousedown
+mouseup
+click
+
+Se observan propiedades como:
+
+clientX
+clientY
+button
+bubbles
+cancelable
+
+El programa parece usar:
+
+element.dispatchEvent(new MouseEvent(...))
+
+Esto permite simular interacción dentro del DOM de Xbox.
+
+======================================================================
+14. MOVIMIENTO DEL CURSOR MEDIANTE elementFromPoint
+======================================================================
+
+Se observa uso de:
+
+document.elementFromPoint(x, y)
+
+También existe:
+
+window.previousHoverElement
+
+Flujo reconstruido:
+
+coordenadas X,Y
+    ->
+document.elementFromPoint(X,Y)
+    ->
+elemento actual
+    ->
+comparar con elemento anterior
+
+Si cambia:
+
+elemento anterior:
+    mouseout
+    mouseleave
+
+elemento nuevo:
+    mouseover
+    mouseenter
+
+y:
+
+mousemove
+
+Por tanto el sistema intenta reproducir el comportamiento de un cursor real aunque el movimiento pueda estar siendo generado por otra fuente de entrada.
+
+Este es uno de los componentes técnicos más importantes para reproducir la funcionalidad.
+
+======================================================================
+15. CLIC MEDIANTE COORDENADAS
+======================================================================
+
+El JavaScript contiene una estrategia equivalente a:
+
+var element = document.elementFromPoint(x, y);
+
+y después genera:
+
+mousedown
+mouseup
+click
+
+También puede hacer:
+
+element.focus()
+
+y:
+
+element.setSelectionRange(...)
+
+si corresponde.
+
+Flujo:
+
+X,Y
+ ->
+elementFromPoint
+ ->
+elemento DOM
+ ->
+focus
+ ->
+mousedown
+ ->
+mouseup
+ ->
+click
+
+======================================================================
+16. TECLADO DENTRO DEL WEBVIEW
+======================================================================
+
+Hay JavaScript para generar:
+
+KeyboardEvent('keydown')
+KeyboardEvent('keyup')
+
+Propiedades observadas:
+
+key
+keyCode
+which
+code
+bubbles
+cancelable
+
+Teclas explícitamente observadas:
+
+Escape
+ArrowLeft
+ArrowDown
+ArrowUp
+ArrowRight
+
+El patrón conceptual es:
+
+const eventOptions = {
+    key: "...",
+    keyCode: ...,
+    which: ...,
+    code: "...",
+    bubbles: true,
+    cancelable: true
+};
+
+document.dispatchEvent(
+    new KeyboardEvent("keydown", eventOptions)
+);
+
+document.dispatchEvent(
+    new KeyboardEvent("keyup", eventOptions)
+);
+
+IMPORTANTE:
+Esto simula eventos DOM. No significa necesariamente que el sistema operativo haya recibido un teclado físico simulado.
+
+======================================================================
+17. DETECCIÓN DE INPUTS DE TEXTO
+======================================================================
+
+El JavaScript vigila elementos interactivos como:
+
+input
+textarea
+contenteditable
+
+Eventos/mensajes:
+
+focusOnInput
+blurOnInput
+
+Patrón conceptual:
+
+window.chrome.webview.postMessage(
+    JSON.stringify({
+        type: "focusOnInput",
+        tagName: target.tagName
+    })
+);
+
+Cuando pierde foco:
+blurOnInput
+
+Interpretación:
+El host necesita saber cuándo el usuario está escribiendo para cambiar el tratamiento de la entrada o activar/desactivar alguna modalidad de control.
+
+======================================================================
+18. GAMEPAD API
+======================================================================
+
+Una característica especialmente importante es el bloqueo de la Gamepad API del navegador.
+
+Se observa lógica equivalente a:
+
+navigator.getGamepads = function() {
+    return [];
+};
+
+navigator.webkitGetGamepads = function() {
+    return [];
+};
+
+También aparecen referencias a:
+
+navigator.gamepads
+navigator.webkitGamepads
+
+y:
+
+window.isGamepadBlocked
+
+Existe lógica para bloquear y restaurar el comportamiento.
+
+Interpretación:
+
+Gamepad físico
+    ->
+InjectedMouse
+    ->
+remapeo propio
+    ->
+eventos de salida
+
+en lugar de permitir que:
+
+Gamepad físico
+    ->
+navigator.getGamepads()
+    ->
+Xbox web
+
+Esto evita que el WebView procese simultáneamente el mando de forma nativa mientras la aplicación intenta controlar/remapear sus entradas.
+
+======================================================================
+19. PI P / PIP WEBVIEW
+======================================================================
+
+La aplicación contiene:
+
+PipWebView
+
+Elementos/properties:
+
+PipLeft
+PipTop
+PipWidth
+PipHeight
+
+PipWebViewVolume
+PipWebViewZoomLevels
+IsPipWebViewMuted
+PipWebViewWasMutedBeforeMasterMute
+
+También:
+
+ClosePip
+PiPClosed
+
+Conclusión:
+
+Existe una segunda superficie WebView flotante o secundaria.
+
+El objetivo parece ser permitir una experiencia Picture-in-Picture para contenido/navegación auxiliar.
+
+======================================================================
+20. ZOOM DEL PIP
+======================================================================
+
+Propiedad:
+
+PipWebViewZoomLevels
+
+También hay JavaScript que modifica:
+
+document.body.style.zoom
+document.body.style.margin
+document.body.style.padding
+document.body.style.width
+document.body.style.height
+document.documentElement...
+
+Se observan ajustes para:
+
+margin = 0
+padding = 0
+width = 100%
+height = 100%
+
+y transición de zoom.
+
+Esto indica que el PiP no depende únicamente del zoom nativo de WebView2: también manipula el DOM.
+
+======================================================================
+21. LIMPIEZA VISUAL DEL PIP
+======================================================================
+
+El JavaScript puede hacer:
+
+document.body.style.overflow = 'hidden';
+document.documentElement.style.overflow = 'hidden';
+
+También aparecen referencias a:
+
+window.status
+
+y CSS para ocultar elementos visuales de hover, por ejemplo:
+
+a:hover::after {
+    display: none !important;
+}
+
+Interpretación:
+
+El PiP se intenta convertir en una superficie limpia, sin scroll/barra/feedback visual web innecesario.
+
+======================================================================
+22. AUDIO
+======================================================================
+
+Properties observadas:
+
+MainWebViewVolume
+PipWebViewVolume
+
+IsMainWebViewMuted
+IsPipWebViewMuted
+
+MasterMuteActive
+
+MainWebViewWasMutedBeforeMasterMute
+PipWebViewWasMutedBeforeMasterMute
+
+El JavaScript busca elementos:
+
+video
+audio
+
+y ajusta:
+
+media.volume
+
+También puede hacer mute/unmute.
+
+Arquitectura:
+
+Master Mute
+   |
+   +--> Main WebView
+   |
+   +--> PiP WebView
+
+El estado previo de mute se conserva para poder restaurarlo.
+
+======================================================================
+23. WINDOWS INPUT INJECTION
+======================================================================
+
+El nombre:
+
+InputInjectionRemapper
+
+es consistente con las APIs de Windows para inyección programática de entrada.
+
+Windows dispone de APIs de Windows.UI.Input.Preview.Injection y relacionadas con generación de input. Microsoft documenta, por ejemplo, InputInjector.InjectGamepadInput para inyectar gamepad input en escenarios permitidos.
+
+También WebView2 dispone de mecanismos nativos de entrada; CoreWebView2CompositionController incluye métodos para enviar mouse/pointer input.
+
+Documentación:
+https://learn.microsoft.com/en-us/uwp/api/windows.ui.input.preview.injection.inputinjector.injectgamepadinput?view=winrt-26100
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2compositioncontroller
+
+La arquitectura más probable es una combinación de:
+- APIs de Windows
+- APIs de WebView2
+- JavaScript DOM
+
+No debe asumirse que una sola API sea responsable de toda la entrada.
+
+======================================================================
+24. IMPORTS DE RED
+======================================================================
+
+APIs observadas:
+
+WSASocketW
+WSAConnect
+WSASend
+WSARecv
+send
+recv
+bind
+listen
+accept
+select
+getsockname
+getpeername
+GetAddrInfoW
+GetAddrInfoExW
+
+También aparecen componentes .NET de:
+
+System.Net.Http
+
+Interpretación:
+El binario tiene capacidad completa de red.
+
+IMPORTANTE:
+La mera importación no demuestra que cada API sea utilizada por código propio. El runtime .NET/HTTP/TLS puede aportar muchas dependencias.
+
+No se identificó en esta inspección un endpoint C2 inequívoco.
+
+======================================================================
+25. CRIPTOGRAFÍA
+======================================================================
+
+APIs observadas:
+
+BCryptGenRandom
+BCryptOpenAlgorithmProvider
+BCryptCreateHash
+BCryptExportKey
+
+CryptAcquireContextW
+CryptGenKey
+CryptImportKey
+CryptGetUserKey
+
+NCryptOpenKey
+NCryptImportKey
+NCryptSetProperty
+NCryptGetProperty
+NCryptDeleteKey
+
+CertOpenStore
+CertFindCertificateInStore
+CertGetCertificateChain
+CertVerifyCertificateChainPolicy
+
+Interpretación:
+La presencia encaja con infraestructura de TLS/HTTPS, certificados, criptografía y .NET.
+
+No hay evidencia suficiente para afirmar que esta criptografía sea una función propia de ocultación, robo de credenciales o C2.
+
+======================================================================
+26. TOKENS DE WINDOWS
+======================================================================
+
+APIs observadas:
+
+OpenProcessToken
+OpenThreadToken
+GetTokenInformation
+DuplicateTokenEx
+ImpersonateLoggedOnUser
+RevertToSelf
+CheckTokenMembershipEx
+
+Estas APIs son sensibles y pueden trabajar con tokens de seguridad.
+
+Pero:
+importación de API != evidencia de uso malicioso.
+
+En un Native AOT grande pueden ser dependencias de runtime/interoperabilidad.
+
+No se ha encontrado evidencia suficiente para afirmar robo de tokens.
+
+======================================================================
+27. PRIVILEGIOS / MANIFIESTO
+======================================================================
+
+Manifiesto observado:
+
+requestedExecutionLevel level="asInvoker" uiAccess="false"
+
+Interpretación:
+No solicita explícitamente elevación UAC y no solicita uiAccess.
+
+Esto reduce la evidencia de un diseño basado en privilegios elevados.
+
+======================================================================
+28. PERSISTENCIA
+======================================================================
+
+No se encontraron cadenas claras que indiquen mecanismos clásicos como:
+
+Run
+RunOnce
+HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+schtasks
+CreateService
+OpenSCManager
+
+Tampoco apareció evidencia clara de instalación como servicio.
+
+Sin embargo aparece:
+
+StartupTask
+
+Esto indica que podría existir integración con inicio automático, pero la mera presencia del tipo no permite afirmar que esté activada.
+
+Para confirmarlo sería necesario analizar el manifiesto/recursos AppX del paquete completo.
+
+======================================================================
+29. URLs Y DOMINIOS ADICIONALES
+======================================================================
+
+URLs claramente relacionadas con el producto/entorno:
+
+https://www.xbox.com/play/
+https://www.xbox.com/play
+https://www.xbox.com/play/search
+gamepass.com
+xbox.com
+
+También se observaron:
+
+https://xbdev.store
+https://xboxdevstore.github.io/
+
+y dos invitaciones Discord:
+
+https://discord.gg/WCmxvvxHqu
+https://discord.gg/f82Tr22vRZ
+
+No se encontraron resultados públicos útiles que permitan atribuir de forma fiable esos dominios/invitaciones a una identidad concreta.
+
+======================================================================
+30. USER-AGENTS
+======================================================================
+
+Se observaron cadenas como:
+
+Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)
+
+y:
+
+Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:x.x.x)
+
+Pueden ser User-Agent utilizados para peticiones/web.
+
+No deben interpretarse por sí solos como indicio de malware.
+
+======================================================================
+31. REGEX DE NÚMEROS ROMANOS
+======================================================================
+
+Se observó:
+
+\b(i{1,3}|iv|v|vi{0,3}|ix|x{1,2}(i{0,3}|iv|v|vi{0,3}|ix|xv))\b
+
+Interpretación probable:
+procesamiento/normalización de títulos o nombres que contienen números romanos.
+
+Ejemplos conceptuales:
+Game II
+Game III
+Game IV
+
+No parece estar relacionado con seguridad.
+
+======================================================================
+32. EXPORTACIONES
+======================================================================
+
+Exportaciones observadas:
+
+DllGetClassObject
+RHBinder__ShimExeMain
+
+No se observaron exportaciones obvias del estilo:
+
+InjectMouse()
+MapButton()
+Initialize()
+SetProfile()
+
+Conclusión:
+No parece una DLL diseñada como SDK público.
+
+Por ello no es razonable asumir que pueda consumirse simplemente con:
+
+DllImport("InjectedMouse.dll")
+
+y llamar una API pública de remapeo.
+
+La lógica principal está integrada en el binario de la aplicación.
+
+======================================================================
+33. FAVORITES / DATOS LOCALES — MODELO RECONSTRUIDO
+======================================================================
+
+FavoriteItem:
+
+Title
+Url
+FavoriteName
+ActualUrl
+FaviconPath
+
+Archivos:
+
+favorites.json
+pipFavorites.json
+history.json
+
+Elementos:
+
+PlayerFavorites
+PlayerPipFavorites
+PipFavoritesPanel
+CurrentSelectedFavorite
+
+Operaciones:
+
+LoadFavorites
+SaveFavorites
+LoadPipFavorites
+SavePipFavorites
+AddToFavorites
+AddFavoriteButton_Click
+AddPipFavoriteButton_Click
+DeleteFavoriteAsync
+RenameFavoriteAsync
+PopulateMyFavoritesAsync
+PopulatePipFavoritesAsync
+AddToHistory
+PopulateHistoryAsync
+
+Almacenamiento observado:
+
+ms-appdata:///local/
+
+El formato exacto JSON no ha podido reconstruirse literalmente a partir del análisis realizado; las propiedades anteriores son las que sí aparecen como estructura funcional.
+
+======================================================================
+34. FLUJO DE FAVORITO RECONSTRUIDO
+======================================================================
+
+Usuario selecciona/abre juego
+    ->
+URL
+    ->
+NormalizeUrl
+    ->
+GetGameTitleFromUrl
+    ->
+FetchAndCacheFavicon
+    ->
+FavoriteItem
+    ->
+favorites.json
+    ->
+UI
+
+Para PiP:
+PipFavorite
+    ->
+pipFavorites.json
+    ->
+PipFavoritesPanel
+
+======================================================================
+35. FLUJO DE HISTORIAL RECONSTRUIDO
+======================================================================
+
+Navigation / URL change
+    ->
+NormalizeUrl
+    ->
+processedUrlsHistory
+    ->
+AddToHistory
+    ->
+history.json
+    ->
+PopulateHistoryAsync
+    ->
+UI
+
+======================================================================
+36. FLUJO DE SELECCIÓN DE JUEGO
+======================================================================
+
+Usuario pulsa .game-item
+    ->
+event.target
+    ->
+buscar ancestro .game-item
+    ->
+href / location.href
+    ->
+innerText / document.title
+    ->
+sendGameSelection
+    ->
+window.chrome.webview.postMessage
+    ->
+WebMessageReceived
+    ->
+host
+    ->
+procesar URL/título
+    ->
+historial/favoritos/navegación
+
+MutationObserver:
+también observa cambios del DOM/URL para detectar cambios dinámicos.
+
+======================================================================
+37. FLUJO DE INPUT RECONSTRUIDO
+======================================================================
+
+Entrada física
+    ->
+captura
+    ->
+remapeo
+    ->
+acción
+
+Acción puede ser:
+- movimiento de mouse
+- click
+- tecla
+- scroll
+- evento DOM
+- input Windows
+
+Mouse:
+X,Y
+ ->
+elementFromPoint
+ ->
+hover tracking
+ ->
+mouseover/mouseenter/mousemove
+ ->
+mousedown/up/click
+
+Keyboard:
+key/code
+ ->
+KeyboardEvent
+ ->
+keydown/keyup
+
+Gamepad:
+botón/eje
+ ->
+mapping
+ ->
+acción de mouse/teclado/Windows input
+
+======================================================================
+38. BLOQUEO DE GAMEPAD — FLUJO
+======================================================================
+
+Gamepad API del navegador
+    ->
+Block
+
+navigator.getGamepads()
+    ->
+[]
+
+navigator.webkitGetGamepads()
+    ->
+[]
+
+Estado:
+window.isGamepadBlocked
+
+Restauración:
+se restaura la API original/comportamiento cuando se desactiva el bloqueo.
+
+Objetivo probable:
+evitar doble procesamiento de gamepad.
+
+======================================================================
+39. PIP — FLUJO
+======================================================================
+
+Open PiP
+    ->
+PipWebView
+    ->
+posición/tamaño
+    ->
+zoom
+    ->
+limpieza CSS/overflow
+    ->
+audio independiente
+    ->
+favoritos PiP
+    ->
+ClosePip
+    ->
+PiPClosed
+
+Propiedades:
+
+PipLeft
+PipTop
+PipWidth
+PipHeight
+PipWebViewVolume
+PipWebViewZoomLevels
+IsPipWebViewMuted
+PipWebViewWasMutedBeforeMasterMute
+
+======================================================================
+40. AUDIO — FLUJO
+======================================================================
+
+MainWebView:
+volume / mute
+
+PipWebView:
+volume / mute
+
+MasterMute:
+    ->
+guardar estado anterior
+    ->
+mute main
+    ->
+mute PiP
+
+Desactivar MasterMute:
+    ->
+restaurar estados anteriores
+
+JS:
+document.querySelectorAll("video, audio")
+    ->
+ajuste volume/muted
+
+======================================================================
+41. ELEMENTOS DE UI RECONSTRUIDOS
+======================================================================
+
+MainPage
+OptionsDialog
+FavoriteItem
+MainWebView
+PipWebView
+
+Botones/eventos:
+
+HomeButton_Click
+SearchButton_Click
+AddFavoriteButton_Click
+AddPipFavoriteButton_Click
+
+Navegación:
+
+CanGoBack
+CanGoForward
+
+Estado:
+
+CurrentSelectedFavorite
+SelectedProfile
+MasterMuteActive
+IsMainWebViewMuted
+IsPipWebViewMuted
+PipWebViewZoomLevels
+
+======================================================================
+42. PERFIL / CONFIGURACIÓN
+======================================================================
+
+Se observó:
+
+SelectedProfile
+
+No se pudo determinar el formato exacto del perfil.
+
+Arquitectura recomendada para reproducción:
+
+Profile
+    name
+    bindings
+    options
+    webviewSettings
+    pipSettings
+    audioSettings
+
+Modelo conceptual:
+
+{
+  "name": "Game Profile",
+  "bindings": {
+    "MouseLeft": "...",
+    "MouseRight": "...",
+    "WheelUp": "...",
+    "WheelDown": "...",
+    "ArrowLeft": "...",
+    "ArrowRight": "..."
+  }
+}
+
+Este JSON es PROPUESTO, no es el formato original confirmado.
+
+======================================================================
+43. API INTERNA RECONSTRUIDA
+======================================================================
+
+Nombres observados literalmente o conceptos funcionales muy próximos:
+
+LoadFavorites()
+SaveFavorites()
+
+LoadPipFavorites()
+SavePipFavorites()
+
+AddToFavorites()
+DeleteFavoriteAsync()
+RenameFavoriteAsync()
+
+PopulateMyFavoritesAsync()
+PopulatePipFavoritesAsync()
+
+GetGameTitleFromUrl()
+FetchAndCacheFavicon()
+NormalizeUrl()
+
+AddToHistory()
+PopulateHistoryAsync()
+
+HomeButton_Click
+SearchButton_Click
+SetInitialFocus
+
+CanGoBack
+CanGoForward
+
+AddFavoriteButton_Click
+AddPipFavoriteButton_Click
+
+Los nombres anteriores deben clasificarse así:
+
+- Los que aparecen como símbolos/cadenas son evidencia directa.
+- Las formas con paréntesis representan la interpretación como método.
+- No debe asumirse que todos tienen exactamente la firma o parámetros indicados.
+
+======================================================================
+44. LO QUE NO SE HA ENCONTRADO
+======================================================================
+
+No se observaron indicios claros de:
+
+- ransomware
+- minería
+- keylogger tradicional
+- C2 inequívoco
+- persistencia mediante servicio
+- CreateRemoteThread
+- WriteProcessMemory
+- VirtualAllocEx
+- DLL injection clásica
+- hook global inequívoco
+- exfiltración evidente de documentos
+- descarga de payload arbitrario evidente
+
+Esto NO equivale a una certificación de seguridad.
+
+Es un análisis estático y el runtime puede contener dependencias no relacionadas directamente con la lógica propia.
+
+======================================================================
+45. VALORACIÓN DE SEGURIDAD
+======================================================================
+
+Puntos favorables:
+
+- arquitectura coherente con una aplicación real de remapeo/game streaming
+- nombres propios coherentes con InputInjectionRemapper
+- WebView2 + Xbox/Game Pass coherentes
+- favoritos/historial coherentes
+- PiP coherente
+- manipulación de input coherente
+- no hay C2 evidente
+- no hay persistencia clásica evidente
+- no hay indicios claros de ransomware/minería
+
+Puntos de cautela:
+
+- no está firmado digitalmente
+- tiene capacidades de red
+- importa APIs de criptografía
+- importa APIs relacionadas con tokens
+- tiene un sistema de input potente
+- contiene JavaScript inyectado
+- StartupTask aparece en símbolos
+- hay dominios/invitaciones externos
+
+Conclusión:
+La evidencia disponible es mucho más consistente con una herramienta de remapeo/streaming que con malware convencional, pero no es una garantía de seguridad.
+
+======================================================================
+46. CÓMO REPRODUCIR LA APLICACIÓN — ARQUITECTURA RECOMENDADA
+======================================================================
+
+Proyecto recomendado:
+
+C#
+.NET
+WinUI 3
+WebView2
+
+Componentes:
+
+MainPage
+OptionsDialog
+InputMapper
+InputInjector
+GameManager
+FavoritesManager
+HistoryManager
+ProfileManager
+AudioManager
+PipManager
+WebMessageBridge
+
+WebViews:
+
+MainWebView
+PipWebView
+
+Input pipeline:
+
+PhysicalInput
+    ->
+InputCapture
+    ->
+Profile/Binding lookup
+    ->
+Action
+    ->
+ActionExecutor
+
+ActionExecutor puede tener:
+
+DomMouseExecutor
+DomKeyboardExecutor
+WebViewInputExecutor
+WindowsInputExecutor
+
+WebMessageBridge:
+
+Web page
+    ->
+chrome.webview.postMessage
+    ->
+WebMessageReceived
+    ->
+validated JSON
+    ->
+application action
+
+La documentación actual de Microsoft recomienda validar los mensajes entrantes y tratar el contenido web como entrada no confiable. También recomienda estructurar mensajes como JSON y restringir navegación a orígenes de confianza cuando sea posible.
+Fuente:
+https://learn.microsoft.com/es-es/windows/apps/develop/ui/controls/webview2
+
+======================================================================
+47. IMPLEMENTACIÓN WEBVIEW2 RECOMENDADA
+======================================================================
+
+Inicialización conceptual:
+
+EnsureCoreWebView2Async()
+
+Eventos:
+
+NavigationStarting
+NavigationCompleted
+WebMessageReceived
+
+JavaScript:
+
+ExecuteScriptAsync(...)
+
+Comunicación host -> web:
+
+PostWebMessageAsJson(...)
+PostWebMessageAsString(...)
+
+Comunicación web -> host:
+
+window.chrome.webview.postMessage(...)
+
+Microsoft documenta estas APIs y el modelo de eventos WebMessageReceived.
+Fuentes:
+https://learn.microsoft.com/es-es/windows/apps/develop/ui/controls/webview2
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2
+
+======================================================================
+48. REPRODUCCIÓN DEL SISTEMA DE RATÓN DOM
+======================================================================
+
+Implementar un script inyectado que:
+
+1. reciba coordenadas X/Y;
+2. ejecute document.elementFromPoint(x,y);
+3. mantenga previousHoverElement;
+4. genere mouseout/mouseleave al salir;
+5. genere mouseover/mouseenter al entrar;
+6. genere mousemove;
+7. permita mousedown;
+8. permita mouseup;
+9. permita click;
+10. haga focus cuando sea necesario.
+
+Esto reproduce la arquitectura observada.
+
+======================================================================
+49. REPRODUCCIÓN DEL SISTEMA DE TECLADO DOM
+======================================================================
+
+Script inyectado:
+
+- recibir key/code/keyCode/which;
+- generar KeyboardEvent keydown;
+- generar KeyboardEvent keyup;
+- usar bubbles/cancelable;
+- controlar Escape y Arrow keys;
+- ampliar a todas las teclas necesarias.
+
+NOTA:
+Para máxima fidelidad deben distinguirse eventos DOM simulados de input real del sistema operativo.
+
+======================================================================
+50. REPRODUCCIÓN DEL GAMEPAD BLOCKER
+======================================================================
+
+Guardar referencias originales:
+
+originalGetGamepads
+originalWebkitGetGamepads
+
+Cuando se bloquea:
+
+navigator.getGamepads = () => [];
+navigator.webkitGetGamepads = () => [];
+
+y manejar el estado:
+
+window.isGamepadBlocked = true
+
+Al restaurar:
+volver a las referencias originales.
+
+IMPORTANTE:
+Debe comprobarse compatibilidad del navegador/versión antes de modificar APIs.
+
+======================================================================
+51. REPRODUCCIÓN DE FAVORITOS
+======================================================================
+
+Modelo:
+
+FavoriteItem:
+Title
+Url
+FavoriteName
+ActualUrl
+FaviconPath
+
+Archivos:
+
+favorites.json
+pipFavorites.json
+
+Operaciones:
+
+load
+save
+add
+delete
+rename
+populate
+
+Normalización:
+
+NormalizeUrl
+
+Metadatos:
+
+GetGameTitleFromUrl
+FetchAndCacheFavicon
+
+======================================================================
+52. REPRODUCCIÓN DE HISTORIAL
+======================================================================
+
+history.json
+
+processedUrlsHistory
+
+Al navegar:
+normalizar URL
+comprobar duplicado
+añadir
+persistir
+
+La implementación real puede tener más reglas que las inferidas.
+
+======================================================================
+53. REPRODUCCIÓN DE PIP
+======================================================================
+
+Segundo WebView2.
+
+Estado:
+
+Left
+Top
+Width
+Height
+Zoom
+Volume
+Muted
+
+Funciones:
+
+Open
+Close
+Resize
+Move
+Zoom
+Mute
+Unmute
+LoadFavorite
+
+CSS/JS:
+
+overflow hidden
+margin 0
+padding 0
+width 100%
+height 100%
+
+======================================================================
+54. REPRODUCCIÓN DE AUDIO
+======================================================================
+
+Para MainWebView y PipWebView:
+
+document.querySelectorAll('video, audio')
+
+Ajustar:
+
+volume
+muted
+
+Guardar estados anteriores cuando se aplica MasterMute.
+
+======================================================================
+55. LO QUE HARÍA FALTA PARA UNA REPRODUCCIÓN CASI EXACTA
+======================================================================
+
+Los archivos más valiosos que aún faltan:
+
+InjectedMouse.pdb
+InjectedMouse.McgInterop.dll
+SharedLibrary.dll
+mrt100_app.dll
+*.winmd
+*.json
+*.pri
+*.xbf
+*.xaml
+manifest
+AppX/MSIX completo
+EXE original, si existe
+cualquier DLL adicional de la misma carpeta
+
+El PDB sería especialmente valioso porque puede conservar nombres/símbolos que permitirían correlacionar mejor el código máquina con clases/métodos.
+
+El paquete completo permitiría recuperar:
+- manifest
+- capacidades
+- startup
+- XAML
+- recursos
+- imágenes
+- configuración
+- posibles scripts separados
+- dependencias
+- versión exacta de WebView/runtime
+
+======================================================================
+56. REUTILIZAR EL DLL EXISTENTE
+======================================================================
+
+No parece existir una API pública de alto nivel como:
+
+Initialize()
+InjectMouse()
+MapButton()
+SetProfile()
+
+Exportaciones observadas:
+
+DllGetClassObject
+RHBinder__ShimExeMain
+
+Por tanto no se puede asumir que el DLL sea un SDK.
+
+La vía más realista para "usar la misma tecnología" es:
+
+A) ejecutar el programa/paquete original si se dispone de todos sus componentes y dependencias;
+
+o:
+
+B) reproducir su arquitectura desde cero.
+
+No se debe asumir que copiar solamente InjectedMouse.dll sea suficiente.
+
+======================================================================
+57. DISTINCIÓN IMPORTANTE: USAR VS REIMPLEMENTAR
+======================================================================
+
+USAR:
+
+InjectedMouse.dll
+    +
+runtime
+    +
+dependencias
+    +
+manifest/package
+    +
+posiblemente otros DLL
+    +
+recursos
+
+REIMPLEMENTAR:
+
+Tu aplicación
+    +
+WinUI 3
+    +
+WebView2
+    +
+InputMapper
+    +
+InputInjector
+    +
+DOM bridge
+    +
+Favorites
+    +
+History
+    +
+PiP
+    +
+Audio
+
+La segunda opción es más controlable y evita depender de una API interna inexistente.
+
+======================================================================
+58. ESPECIFICACIÓN DE REFERENCIA DE ALTO NIVEL
+======================================================================
+
+Objetivo:
+Aplicación Windows x64 para interactuar con Xbox Cloud Gaming mediante WebView2 y proporcionar remapeo de entrada.
+
+REQUISITOS:
+
+- WinUI/XAML
+- WebView2
+- MainWebView
+- PipWebView
+- Xbox Cloud Gaming
+- navegación
+- favoritos
+- favoritos PiP
+- historial
+- favicon cache
+- selección automática de juegos
+- bridge JS <-> host
+- detección de focus/blur de inputs
+- bloqueo/restauración de Gamepad API
+- mouse DOM
+- keyboard DOM
+- input Windows
+- PiP
+- zoom PiP
+- audio main
+- audio PiP
+- master mute
+- perfiles/remapeos
+
+DATOS:
+
+favorites.json
+pipFavorites.json
+history.json
+
+MENSAJES:
+
+game-selected
+focusOnInput
+blurOnInput
+
+DOM:
+
+.game-item
+elementFromPoint
+input
+textarea
+contenteditable
+video
+audio
+
+EVENTOS:
+
+mousedown
+mouseup
+click
+mousemove
+mouseover
+mouseenter
+mouseout
+mouseleave
+keydown
+keyup
+
+======================================================================
+59. MAPA DE COMPONENTES
+======================================================================
+
+InjectedMouse
+|
++-- MainPage
+|   |
+|   +-- MainWebView
+|   +-- Navigation
+|   +-- Favorites
+|   +-- History
+|   +-- Input
+|   +-- Audio
+|   +-- Game selection
+|
++-- OptionsDialog
+|   |
+|   +-- FavoriteItem
+|   +-- Profile selection
+|
++-- Pip
+|   |
+|   +-- PipWebView
+|   +-- PipFavorites
+|   +-- Zoom
+|   +-- Position/size
+|   +-- Audio
+|
++-- Web bridge
+|   |
+|   +-- game-selected
+|   +-- focusOnInput
+|   +-- blurOnInput
+|
++-- Input system
+|   |
+|   +-- mouse
+|   +-- keyboard
+|   +-- gamepad
+|   +-- remapping
+|   +-- injection
+|
++-- Persistence
+    |
+    +-- favorites.json
+    +-- pipFavorites.json
+    +-- history.json
+
+======================================================================
+60. LIMITACIONES Y GRADO DE CERTEZA
+======================================================================
+
+CONFIRMADO/OBSERVADO:
+- nombre InjectedMouse
+- nombre InputInjectionRemapper
+- proyecto InjectedMouseGamepass en ruta PDB
+- Native AOT/ILC indicators
+- MainPage
+- OptionsDialog
+- FavoriteItem
+- MainWebView
+- PipWebView
+- favorites.json
+- pipFavorites.json
+- history.json
+- FavoriteItem properties
+- GamePass/Xbox URLs
+- window.chrome.webview.postMessage
+- game-selected
+- focusOnInput
+- blurOnInput
+- .game-item
+- MutationObserver
+- elementFromPoint
+- mouse/keyboard DOM events
+- bloqueo de getGamepads
+- PiP properties
+- audio properties
+- network/crypto/token APIs
+- asInvoker/uiAccess=false
+- StartupTask symbol
+- exportaciones DllGetClassObject y RHBinder__ShimExeMain
+- ausencia de firma Authenticode
+
+RECONSTRUIDO/INFERIDO:
+- binding exacto de cada botón
+- formato JSON exacto de perfiles
+- ubicación exacta de archivos locales
+- firmas completas de métodos
+- orden exacto de ciertas operaciones
+- qué imports son utilizados por código propio frente al runtime
+- activación real de StartupTask
+- significado exacto de cada API de token
+- existencia de un C2 (no demostrado)
+- mapeo exacto gamepad -> mouse/keyboard
+
+======================================================================
+61. CONCLUSIÓN OPERATIVA
+======================================================================
+
+El DLL corresponde, según la evidencia disponible, a una aplicación nativa x64 basada en .NET Native/ILC que combina:
+
+1. WinUI/XAML
+2. WebView2
+3. Xbox Cloud Gaming/Game Pass
+4. JavaScript inyectado
+5. bridge WebView2 <-> aplicación
+6. remapeo de entrada
+7. simulación de eventos DOM
+8. input Windows
+9. bloqueo de Gamepad API
+10. favoritos
+11. historial
+12. PiP
+13. zoom
+14. audio/mute
+
+La arquitectura central que hay que conservar para una reproducción fiel es:
+
+INPUT
+  ->
+MAPPING
+  ->
+ACTION
+  ->
+WEBVIEW / DOM / WINDOWS INPUT
+
+y:
+
+WEBVIEW
+  ->
+JavaScript
+  ->
+postMessage
+  ->
+HOST
+  ->
+estado/acción
+
+El archivo por sí solo no parece ser una biblioteca reutilizable con una API pública sencilla. Para usar el original con máxima integridad es preferible conservar el paquete/directorio completo y sus dependencias. Para crear una alternativa, la arquitectura anterior es una especificación técnica razonablemente fiel a lo que se ha podido extraer.
+
+======================================================================
+62. FUENTES TÉCNICAS EXTERNAS UTILIZADAS PARA CONTRASTAR LA ARQUITECTURA
+======================================================================
+
+Microsoft Learn — WebView2:
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2
+
+Microsoft Learn — WebView2 en WinUI 3:
+https://learn.microsoft.com/es-es/windows/apps/develop/ui/controls/webview2
+
+Microsoft Learn — WebMessageReceived:
+https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.webview2.webmessagereceived?view=windows-app-sdk-1.8
+
+Microsoft Learn — CoreWebView2WebMessageReceivedEventArgs:
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/winrt/microsoft_web_webview2_core/corewebview2webmessagereceivedeventargs?view=webview2-1.0.4022.49
+
+Microsoft Learn — InputInjector.InjectGamepadInput:
+https://learn.microsoft.com/en-us/uwp/api/windows.ui.input.preview.injection.inputinjector.injectgamepadinput?view=winrt-26100
+
+Microsoft Learn — CoreWebView2CompositionController:
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2compositioncontroller?view=webview2-1.0.3719.77
+
+Las fuentes externas se utilizaron únicamente para contrastar el funcionamiento documentado de WebView2/Input Injection; los datos específicos de InjectedMouse.dll proceden del análisis del archivo proporcionado.
+
+======================================================================
+63. PRÓXIMA FASE RECOMENDADA
+======================================================================
+
+Si se dispone de la carpeta completa del programa, analizar:
+
+InjectedMouse.pdb
+InjectedMouse.McgInterop.dll
+SharedLibrary.dll
+mrt100_app.dll
+manifest
+*.winmd
+*.pri
+*.xbf
+*.xaml
+*.json
+EXE
+demás DLL
+
+Prioridades:
+
+1. extraer símbolos del PDB;
+2. identificar clases propias;
+3. recuperar scripts completos;
+4. recuperar recursos XAML;
+5. recuperar manifest y capabilities;
+6. identificar startup real;
+7. reconstruir JSON reales;
+8. identificar dependencias;
+9. distinguir runtime de código propio;
+10. construir especificación de compatibilidad;
+11. si procede, crear una implementación limpia equivalente.
+
+FIN DEL INFORME
