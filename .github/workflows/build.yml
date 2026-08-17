@@ -1,0 +1,35 @@
+name: Compilar y Firmar App Xbox
+
+on:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Descargar codigo
+      uses: actions/checkout@v4
+
+    - name: Configurar MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Crear Certificado Digital Autentico
+      shell: powershell
+      run: |
+        New-SelfSignedCertificate -Type Custom -Subject "CN=XboxCloudDirectCert" -KeyUsage DigitalSignature -FriendlyName "XboxCloudCert" -CertStoreLocation "Cert:\CurrentUser\My"
+        $password = ConvertTo-SecureString "1234" -AsPlainText -Force
+        Export-PfxCertificate -Cert Cert:\CurrentUser\My\* -FilePath .\XboxCloudDirectCert.pfx -Password $password
+
+    - name: Compilar Proyecto UWP y Generar Paquete Finał
+      shell: powershell
+      run: |
+        msbuild App.csproj /p:Configuration=Release /p:Platform=x64 /p:AppxPackageDir=.\AppxPackages /p:AppxBundle=Always /p:PackageCertificateKeyFile=.\XboxCloudDirectCert.pfx /p:PackageCertificatePassword=1234 /p:AppxPackageSigningEnabled=true
+
+    - name: Subir App lista para descargar
+      uses: actions/upload-artifact@v4
+      with:
+        name: App-Xbox-Cloud-Firmada
+        path: .\AppxPackages\
+        
