@@ -1,0 +1,14 @@
+<Page
+    x:Class="XboxCloudApp.MainPage"
+    xmlns="http://microsoft.com"
+    xmlns:x="http://microsoft.com"
+    xmlns:d="http://microsoft.com"
+    xmlns:mc="http://openxmlformats.org"
+    mc:Ignorable="d"
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+
+    <Grid>
+        <!-- WebView a pantalla completa cargando Xbox Cloud directamente -->
+        <WebView x:Name="CloudWebView" Source="https://xbox.com" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+    </Grid>
+</Page>
